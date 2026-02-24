@@ -52,19 +52,24 @@ It allows a workflow to pause for human approval by sending email links to appro
 
 ## Installation
 
-### Option 1: Use prebuilt release artifact
+Download the latest JAR from [Releases](../../releases) and install via the Rundeck UI:
+
+1. Navigate to **System Menu** → **Plugins** → **Upload Plugin**
+2. Select `approval-job-step-3.0.9.jar`
+3. The plugin is available immediately. If your environment uses plugin caching, reload plugins or restart Rundeck.
+
+### Alternative CLI install
 
 ```bash
 cp releases/approval-job-step-3.0.9.jar $RDECK_BASE/libext/
-# restart Rundeck or reload plugins
+# then reload plugins or restart Rundeck
 ```
 
-### Option 2: Build from source
+### Build from source
 
 ```bash
 ./gradlew clean jar
 cp build/libs/approval-job-step-3.0.9.jar $RDECK_BASE/libext/
-# restart Rundeck or reload plugins
 ```
 
 ## Configuration
