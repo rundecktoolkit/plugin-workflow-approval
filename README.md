@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="#overview">Overview</a> •
+  <a href="#screenshots">Screenshots</a> •
   <a href="#installation">Installation</a> •
   <a href="#configuration">Configuration</a> •
   <a href="#uninstall">Uninstall</a> •
@@ -37,6 +38,20 @@ It lets a workflow pause for human approval using centrally managed, project-sco
 - Rundeck-hosted approval landing page and approve/deny callbacks
 - SMTP and Slack secrets stored in Rundeck Key Storage
 - Test actions for SMTP, email delivery, Slack connection, and Slack delivery
+
+## Screenshots
+
+### Project Approvals Overview
+
+![Project Approvals Overview](docs/images/approvals-overview.png)
+
+### Email Configuration
+
+![Email Configuration](docs/images/email-configuration.png)
+
+### Slack Configuration
+
+![Slack Configuration](docs/images/slack-configuration.png)
 
 ## Compatibility
 
