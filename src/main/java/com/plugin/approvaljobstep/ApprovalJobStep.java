@@ -1,10 +1,12 @@
 package com.plugin.approvaljobstep;
 
 import com.dtolabs.rundeck.core.execution.ExecutionListener;
+import com.dtolabs.rundeck.core.plugins.PluginException;
 import com.dtolabs.rundeck.core.storage.ResourceMeta;
 import com.dtolabs.rundeck.core.execution.workflow.steps.StepException;
 import com.dtolabs.rundeck.core.execution.workflow.steps.StepFailureReason;
 import com.dtolabs.rundeck.core.plugins.Plugin;
+import com.dtolabs.rundeck.core.plugins.PluginResourceLoader;
 import com.dtolabs.rundeck.core.plugins.configuration.Description;
 import com.dtolabs.rundeck.core.plugins.configuration.Describable;
 import com.dtolabs.rundeck.core.plugins.configuration.DynamicProperties;
@@ -36,8 +38,10 @@ import java.io.ByteArrayOutputStream;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.net.URL;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -59,22 +63,37 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 @Plugin(service = "WorkflowStep", name = "approval-job-step")
 @PluginDescription(
-    title = "Approval Job Step",
-    description = "Inserts a user approval step into a job workflow with sequential email approvals and callback links."
+    title = "Approval Gate",
+    description = "Adds an approval gate to a job workflow using centrally managed email or Slack settings."
 )
-public class ApprovalJobStep implements StepPlugin, Describable, DynamicProperties {
+public class ApprovalJobStep implements StepPlugin, Describable, DynamicProperties, PluginResourceLoader {
+    private static final String PROP_APPROVAL_PROFILE = "approvalProfile";
     private static final String PROP_APPROVAL_MESSAGE = "approvalMessage";
     private static final String PROP_APPROVAL_TIMEOUT_MINUTES = "approvalTimeoutMinutes";
     private static final String PROP_AUTO_APPROVE_ON_TIMEOUT = "autoApproveOnTimeout";
+    private static final String PROP_NOTIFICATION_METHOD = "notificationMethod";
     private static final String PROP_PRIMARY_APPROVER_EMAIL = "primaryApproverEmail";
     private static final String PROP_SECONDARY_APPROVER_EMAIL = "secondaryApproverEmail";
     private static final String PROP_ESCALATION_TIME_MINUTES = "escalationTimeMinutes";
+    private static final String PROP_APPROVAL_ONE_PRIMARY_APPROVER_EMAIL = "approvalOnePrimaryApproverEmail";
+    private static final String PROP_APPROVAL_ONE_SECONDARY_APPROVER_EMAIL = "approvalOneSecondaryApproverEmail";
+    private static final String PROP_APPROVAL_ONE_PRIMARY_SLACK_USER_ID = "approvalOnePrimarySlackUserId";
+    private static final String PROP_APPROVAL_ONE_SECONDARY_SLACK_USER_ID = "approvalOneSecondarySlackUserId";
+    private static final String PROP_APPROVAL_ONE_DELIVERY_CHANNEL = "approvalOneDeliveryChannel";
+    private static final String PROP_APPROVAL_ONE_ESCALATION_TIME_MINUTES = "approvalOneEscalationTimeMinutes";
+    private static final String PROP_APPROVAL_TWO_PRIMARY_APPROVER_EMAIL = "approvalTwoPrimaryApproverEmail";
+    private static final String PROP_APPROVAL_TWO_SECONDARY_APPROVER_EMAIL = "approvalTwoSecondaryApproverEmail";
+    private static final String PROP_APPROVAL_TWO_PRIMARY_SLACK_USER_ID = "approvalTwoPrimarySlackUserId";
+    private static final String PROP_APPROVAL_TWO_SECONDARY_SLACK_USER_ID = "approvalTwoSecondarySlackUserId";
+    private static final String PROP_APPROVAL_TWO_DELIVERY_CHANNEL = "approvalTwoDeliveryChannel";
+    private static final String PROP_APPROVAL_TWO_ESCALATION_TIME_MINUTES = "approvalTwoEscalationTimeMinutes";
     private static final String PROP_SMTP_SERVER = "smtpServer";
     private static final String PROP_SMTP_PORT = "smtpPort";
     private static final String PROP_SMTP_USERNAME = "smtpUsername";
     private static final String PROP_SMTP_PASSWORD_PATH = "smtpPasswordPath";
     private static final String PROP_FROM_EMAIL_ADDRESS = "fromEmailAddress";
     private static final String PROP_USE_TLS = "useTls";
+    private static final String PROP_SLACK_BOT_TOKEN_PATH = "slackBotTokenPath";
     private static final String PROP_APPROVAL_URL_BASE = "approvalUrlBase";
     private static final String PROP_CHECK_INTERVAL_SECONDS = "checkIntervalSeconds";
 
@@ -93,15 +112,43 @@ public class ApprovalJobStep implements StepPlugin, Describable, DynamicProperti
 
     private String approvalMessage;
 
+    private String approvalProfile;
+
     private Integer approvalTimeoutMinutes;
 
     private Boolean autoApproveOnTimeout;
+
+    private String notificationMethod;
 
     private String primaryApproverEmail;
 
     private String secondaryApproverEmail;
 
     private Integer escalationTimeMinutes;
+
+    private String approvalOnePrimaryApproverEmail;
+
+    private String approvalOneSecondaryApproverEmail;
+
+    private String approvalOnePrimarySlackUserId;
+
+    private String approvalOneSecondarySlackUserId;
+
+    private String approvalOneDeliveryChannel;
+
+    private Integer approvalOneEscalationTimeMinutes;
+
+    private String approvalTwoPrimaryApproverEmail;
+
+    private String approvalTwoSecondaryApproverEmail;
+
+    private String approvalTwoPrimarySlackUserId;
+
+    private String approvalTwoSecondarySlackUserId;
+
+    private String approvalTwoDeliveryChannel;
+
+    private Integer approvalTwoEscalationTimeMinutes;
 
     private String smtpServer;
 
@@ -115,157 +162,80 @@ public class ApprovalJobStep implements StepPlugin, Describable, DynamicProperti
 
     private Boolean useTls;
 
+    private String slackBotTokenPath;
+
     private String approvalUrlBase;
 
     private Integer checkIntervalSeconds;
 
+    private String primarySlackUserId;
+
+    private String secondarySlackUserId;
+
+    private String deliveryChannel;
+
     @Override
     public Description getDescription() {
-        UserSelectData selectData = loadUserSelectData();
         DescriptionBuilder builder = DescriptionBuilder.builder();
         builder.name("approval-job-step")
-            .title("Approval Job Step")
-            .description("Inserts a user approval step into a job workflow with sequential email approvals and callback links. WARNING: pending approvals keep execution resources active until approved, denied, or timed out.");
+            .title("Approval Gate")
+            .description("Approval gate for workflow execution. Shared approvers, email/Slack delivery settings, escalation, and callback settings are configured centrally in project Approvals settings. WARNING: every pending approval keeps execution resources active until approved, denied, or timed out, and long waits can reduce platform performance.");
+
+        builder.property(PropertyBuilder.builder()
+            .select(PROP_APPROVAL_PROFILE)
+            .title("Approval Profile")
+            .description("Choose which centrally managed project approval profile this step should use.")
+            .required(false)
+            .defaultValue("approval1")
+            .values(List.of("approval1", "approval2"))
+            .labels(Map.of(
+                "approval1", "Approval 1",
+                "approval2", "Approval 2"
+            ))
+            .scope(PropertyScope.Instance)
+            .renderingOption(StringRenderingConstants.GROUP_NAME, "Approval Configuration"));
 
         builder.property(PropertyBuilder.builder()
             .string(PROP_APPROVAL_MESSAGE)
             .title("Approval Message")
             .description("Message sent to approvers")
             .required(true)
+            .scope(PropertyScope.Instance)
             .renderingOption(StringRenderingConstants.DISPLAY_TYPE_KEY, StringRenderingConstants.DisplayType.MULTI_LINE)
-            .renderingOption(StringRenderingConstants.GROUP_NAME, "Approval Configuration"));
-
-        builder.property(PropertyBuilder.builder()
-            .integer(PROP_APPROVAL_TIMEOUT_MINUTES)
-            .title("Approval Timeout (minutes)")
-            .description("Maximum wait time. If timeout is reached and Auto-approve on Timeout is false, this step fails and the job execution terminates.")
-            .defaultValue("60")
-            .required(false)
             .renderingOption(StringRenderingConstants.GROUP_NAME, "Approval Configuration"));
 
         builder.property(PropertyBuilder.builder()
             .booleanType(PROP_AUTO_APPROVE_ON_TIMEOUT)
             .title("Auto-approve on Timeout")
-            .description("If true, timeout continues the workflow as approved. If false, timeout fails this step and terminates the job.")
+            .description("If true, timeout continues the workflow as approved. If false, timeout fails this step and terminates the job. Pending approvals keep execution resources active while they wait.")
             .defaultValue("false")
             .required(false)
+            .scope(PropertyScope.Instance)
             .renderingOption(StringRenderingConstants.GROUP_NAME, "Approval Configuration"));
-
-        builder.property(PropertyBuilder.builder()
-            .type(Property.Type.FreeSelect)
-            .name(PROP_PRIMARY_APPROVER_EMAIL)
-            .title("Primary Approver")
-            .description("Select a user email or enter a custom email address")
-            .required(true)
-            .values(selectData.values)
-            .labels(selectData.labels)
-            .renderingOption(StringRenderingConstants.GROUP_NAME, "Sequential Approvers"));
-
-        builder.property(PropertyBuilder.builder()
-            .type(Property.Type.FreeSelect)
-            .name(PROP_SECONDARY_APPROVER_EMAIL)
-            .title("Secondary Approver (Escalation)")
-            .description("Optional escalation approver")
-            .required(false)
-            .values(selectData.values)
-            .labels(selectData.labels)
-            .renderingOption(StringRenderingConstants.GROUP_NAME, "Sequential Approvers"));
-
-        builder.property(PropertyBuilder.builder()
-            .integer(PROP_ESCALATION_TIME_MINUTES)
-            .title("Escalation Time (minutes)")
-            .description("Escalation delay")
-            .defaultValue("30")
-            .required(false)
-            .renderingOption(StringRenderingConstants.GROUP_NAME, "Sequential Approvers"));
-
-        builder.property(PropertyBuilder.builder()
-            .string(PROP_SMTP_SERVER)
-            .title("SMTP Server")
-            .description("SMTP host")
-            .required(true)
-            .renderingOption(StringRenderingConstants.GROUP_NAME, "Email Configuration"));
-
-        builder.property(PropertyBuilder.builder()
-            .integer(PROP_SMTP_PORT)
-            .title("SMTP Port")
-            .description("SMTP port")
-            .defaultValue("587")
-            .required(false)
-            .renderingOption(StringRenderingConstants.GROUP_NAME, "Email Configuration"));
-
-        builder.property(PropertyBuilder.builder()
-            .string(PROP_SMTP_USERNAME)
-            .title("SMTP Username")
-            .description("SMTP username")
-            .required(true)
-            .renderingOption(StringRenderingConstants.GROUP_NAME, "Email Configuration"));
-
-        builder.property(PropertyBuilder.builder()
-            .string(PROP_SMTP_PASSWORD_PATH)
-            .title("SMTP Password Path")
-            .description("Key Storage path for SMTP password")
-            .required(true)
-            .renderingOption(StringRenderingConstants.SELECTION_ACCESSOR_KEY, "STORAGE_PATH")
-            .renderingOption(StringRenderingConstants.STORAGE_PATH_ROOT_KEY, "keys")
-            .renderingOption(StringRenderingConstants.GROUP_NAME, "Email Configuration"));
-
-        builder.property(PropertyBuilder.builder()
-            .string(PROP_FROM_EMAIL_ADDRESS)
-            .title("From Email Address")
-            .description("Sender address")
-            .required(true)
-            .renderingOption(StringRenderingConstants.GROUP_NAME, "Email Configuration"));
-
-        builder.property(PropertyBuilder.builder()
-            .booleanType(PROP_USE_TLS)
-            .title("Use TLS")
-            .description("Enable SMTP STARTTLS")
-            .defaultValue("true")
-            .required(false)
-            .renderingOption(StringRenderingConstants.GROUP_NAME, "Email Configuration"));
-
-        builder.property(PropertyBuilder.builder()
-            .string(PROP_APPROVAL_URL_BASE)
-            .title("Approval URL Base")
-            .description("Base URL for approve/deny links")
-            .required(false)
-            .renderingOption(StringRenderingConstants.GROUP_NAME, "Advanced Options")
-            .renderingOption(StringRenderingConstants.GROUPING, "secondary"));
-
-        builder.property(PropertyBuilder.builder()
-            .integer(PROP_CHECK_INTERVAL_SECONDS)
-            .title("Check Interval (seconds)")
-            .description("Polling interval while waiting for approval. WARNING: each pending approval keeps execution resources active and can exhaust available worker threads at scale.")
-            .defaultValue("30")
-            .required(false)
-            .renderingOption(StringRenderingConstants.GROUP_NAME, "Advanced Options")
-            .renderingOption(StringRenderingConstants.GROUPING, "secondary"));
 
         return builder.build();
     }
 
     @Override
     public Map<String, Object> dynamicProperties(Map<String, Object> projectAndFrameworkValues, Services services) {
-        UserSelectData selectData = loadUserSelectData();
-        if (selectData.values.isEmpty()) {
-            System.err.println("ApprovalJobStep dynamicProperties: no users loaded");
-            LOG.warn("ApprovalJobStep dynamicProperties: no users loaded");
-            return null;
-        }
-        System.err.println("ApprovalJobStep dynamicProperties: loaded " + selectData.values.size() + " users");
-        LOG.info("ApprovalJobStep dynamicProperties: loaded {} users", selectData.values.size());
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put(PROP_PRIMARY_APPROVER_EMAIL, selectData.labels);
-        out.put(PROP_SECONDARY_APPROVER_EMAIL, selectData.labels);
-        return out;
+        return null;
+    }
+
+    @Override
+    public List<String> listResources() throws PluginException, IOException {
+        return List.of("WorkflowStep.approval-job-step.icon.png");
+    }
+
+    @Override
+    public InputStream openResourceStreamFor(String name) throws PluginException, IOException {
+        return this.getClass().getResourceAsStream("/" + name);
     }
 
     @Override
     public void executeStep(PluginStepContext context, Map<String, Object> configuration) throws StepException {
         final ExecutionListener logger = context.getExecutionContext().getExecutionListener();
 
-        normalizeConfig(configuration);
+        normalizeConfig(context, configuration);
         validateConfiguration();
 
         if (isBlank(this.approvalUrlBase)) {
@@ -275,10 +245,12 @@ public class ApprovalJobStep implements StepPlugin, Describable, DynamicProperti
         startCallbackServerIfNeeded(logger, callbackPort);
 
         final String smtpPassword;
+        final String slackBotToken;
         try {
-            smtpPassword = getPasswordFromKeyStorage(context, this.smtpPasswordPath);
+            smtpPassword = "email".equalsIgnoreCase(this.deliveryChannel) ? getPasswordFromKeyStorage(context, this.smtpPasswordPath) : null;
+            slackBotToken = "slack".equalsIgnoreCase(this.deliveryChannel) ? getPasswordFromKeyStorage(context, this.slackBotTokenPath) : null;
         } catch (Exception e) {
-            throw new StepException("Error accessing SMTP password from key storage: " + e.getMessage(), e, StepFailureReason.ConfigurationFailure);
+            throw new StepException("Error accessing approval delivery secret from key storage: " + e.getMessage(), e, StepFailureReason.ConfigurationFailure);
         }
 
         logger.log(2, "Starting approval workflow step");
@@ -318,6 +290,7 @@ public class ApprovalJobStep implements StepPlugin, Describable, DynamicProperti
         approvalData.put("jobId", jobId);
         String rundeckBaseUrl = resolveRundeckBaseUrl(context);
         if (!isBlank(rundeckBaseUrl)) {
+            approvalData.put("rundeckBaseUrl", rundeckBaseUrl);
             String executionUrl = rundeckBaseUrl + "/project/" + urlEncode(projectName) + "/execution/show/" + urlEncode(executionId);
             approvalData.put("executionUrl", executionUrl);
             if (!isBlank(jobId)) {
@@ -327,16 +300,17 @@ public class ApprovalJobStep implements StepPlugin, Describable, DynamicProperti
         }
         approvalData.put("requestTime", new Date().toString());
         approvalData.put("status", "pending");
-        approvalData.put("currentApprover", this.primaryApproverEmail);
+        approvalData.put("deliveryChannel", this.deliveryChannel);
+        approvalData.put("currentApprover", "slack".equalsIgnoreCase(this.deliveryChannel) ? this.primarySlackUserId : this.primaryApproverEmail);
 
         try {
-            sendApprovalEmail(smtpPassword, this.primaryApproverEmail, approvalData, false, logger);
-            logger.log(2, "Sent approval request to primary approver");
+            sendApprovalNotification(smtpPassword, slackBotToken, approvalData, false, logger);
+            logger.log(2, "Sent approval request to primary approver via " + this.deliveryChannel + ": " + currentPrimaryRecipientForLogs());
         } catch (Exception e) {
-            throw new StepException("Failed to send approval email: " + e.getMessage(), e, StepFailureReason.IOFailure);
+            throw new StepException("Failed to send approval notification: " + e.getMessage(), e, StepFailureReason.IOFailure);
         }
 
-        final String result = waitForApproval(smtpPassword, approvalData, logger);
+        final String result = waitForApproval(smtpPassword, slackBotToken, approvalData, logger);
 
         context.getExecutionContext().getOutputContext().addOutput("approval", "id", approvalId);
         context.getExecutionContext().getOutputContext().addOutput("approval", "result", result);
@@ -357,35 +331,134 @@ public class ApprovalJobStep implements StepPlugin, Describable, DynamicProperti
         }
     }
 
-    private void normalizeConfig(Map<String, Object> configuration) {
+    private void normalizeConfig(PluginStepContext context, Map<String, Object> configuration) {
+        Map<String, String> projectProps = loadProjectProperties(context);
+
+        this.approvalProfile = stringOrDefault(configuration.get(PROP_APPROVAL_PROFILE), this.approvalProfile);
         this.approvalMessage = stringOrDefault(configuration.get(PROP_APPROVAL_MESSAGE), this.approvalMessage);
-        this.primaryApproverEmail = stringOrDefault(configuration.get(PROP_PRIMARY_APPROVER_EMAIL), this.primaryApproverEmail);
-        this.secondaryApproverEmail = stringOrDefault(configuration.get(PROP_SECONDARY_APPROVER_EMAIL), this.secondaryApproverEmail);
-        this.smtpServer = stringOrDefault(configuration.get(PROP_SMTP_SERVER), this.smtpServer);
-        this.smtpUsername = stringOrDefault(configuration.get(PROP_SMTP_USERNAME), this.smtpUsername);
-        this.smtpPasswordPath = stringOrDefault(configuration.get(PROP_SMTP_PASSWORD_PATH), this.smtpPasswordPath);
-        this.fromEmailAddress = stringOrDefault(configuration.get(PROP_FROM_EMAIL_ADDRESS), this.fromEmailAddress);
-        this.approvalUrlBase = stringOrDefault(configuration.get(PROP_APPROVAL_URL_BASE), this.approvalUrlBase);
+        this.notificationMethod = stringOrDefault(projectProps.get(projectPropKey(PROP_NOTIFICATION_METHOD)), this.notificationMethod);
+        this.primaryApproverEmail = stringOrDefault(projectProps.get(projectPropKey(PROP_PRIMARY_APPROVER_EMAIL)), this.primaryApproverEmail);
+        this.secondaryApproverEmail = stringOrDefault(projectProps.get(projectPropKey(PROP_SECONDARY_APPROVER_EMAIL)), this.secondaryApproverEmail);
+        this.approvalOnePrimaryApproverEmail = stringOrDefault(projectProps.get(projectPropKey(PROP_APPROVAL_ONE_PRIMARY_APPROVER_EMAIL)), this.approvalOnePrimaryApproverEmail);
+        this.approvalOneSecondaryApproverEmail = stringOrDefault(projectProps.get(projectPropKey(PROP_APPROVAL_ONE_SECONDARY_APPROVER_EMAIL)), this.approvalOneSecondaryApproverEmail);
+        this.approvalOnePrimarySlackUserId = stringOrDefault(projectProps.get(projectPropKey(PROP_APPROVAL_ONE_PRIMARY_SLACK_USER_ID)), this.approvalOnePrimarySlackUserId);
+        this.approvalOneSecondarySlackUserId = stringOrDefault(projectProps.get(projectPropKey(PROP_APPROVAL_ONE_SECONDARY_SLACK_USER_ID)), this.approvalOneSecondarySlackUserId);
+        this.approvalOneDeliveryChannel = stringOrDefault(projectProps.get(projectPropKey(PROP_APPROVAL_ONE_DELIVERY_CHANNEL)), this.approvalOneDeliveryChannel);
+        this.approvalTwoPrimaryApproverEmail = stringOrDefault(projectProps.get(projectPropKey(PROP_APPROVAL_TWO_PRIMARY_APPROVER_EMAIL)), this.approvalTwoPrimaryApproverEmail);
+        this.approvalTwoSecondaryApproverEmail = stringOrDefault(projectProps.get(projectPropKey(PROP_APPROVAL_TWO_SECONDARY_APPROVER_EMAIL)), this.approvalTwoSecondaryApproverEmail);
+        this.approvalTwoPrimarySlackUserId = stringOrDefault(projectProps.get(projectPropKey(PROP_APPROVAL_TWO_PRIMARY_SLACK_USER_ID)), this.approvalTwoPrimarySlackUserId);
+        this.approvalTwoSecondarySlackUserId = stringOrDefault(projectProps.get(projectPropKey(PROP_APPROVAL_TWO_SECONDARY_SLACK_USER_ID)), this.approvalTwoSecondarySlackUserId);
+        this.approvalTwoDeliveryChannel = stringOrDefault(projectProps.get(projectPropKey(PROP_APPROVAL_TWO_DELIVERY_CHANNEL)), this.approvalTwoDeliveryChannel);
+        this.smtpServer = stringOrDefault(projectProps.get(projectPropKey(PROP_SMTP_SERVER)), this.smtpServer);
+        this.smtpUsername = stringOrDefault(projectProps.get(projectPropKey(PROP_SMTP_USERNAME)), this.smtpUsername);
+        this.smtpPasswordPath = stringOrDefault(projectProps.get(projectPropKey(PROP_SMTP_PASSWORD_PATH)), this.smtpPasswordPath);
+        this.fromEmailAddress = stringOrDefault(projectProps.get(projectPropKey(PROP_FROM_EMAIL_ADDRESS)), this.fromEmailAddress);
+        this.slackBotTokenPath = stringOrDefault(projectProps.get(projectPropKey(PROP_SLACK_BOT_TOKEN_PATH)), this.slackBotTokenPath);
+        this.approvalUrlBase = stringOrDefault(projectProps.get(projectPropKey(PROP_APPROVAL_URL_BASE)), this.approvalUrlBase);
 
         this.approvalTimeoutMinutes = toInt(configuration.get(PROP_APPROVAL_TIMEOUT_MINUTES), valueOrDefault(this.approvalTimeoutMinutes, 60));
-        this.escalationTimeMinutes = toInt(configuration.get(PROP_ESCALATION_TIME_MINUTES), valueOrDefault(this.escalationTimeMinutes, 30));
-        this.smtpPort = toInt(configuration.get(PROP_SMTP_PORT), valueOrDefault(this.smtpPort, 587));
-        this.checkIntervalSeconds = toInt(configuration.get(PROP_CHECK_INTERVAL_SECONDS), valueOrDefault(this.checkIntervalSeconds, 30));
-        this.useTls = toBool(configuration.get(PROP_USE_TLS), this.useTls == null ? true : this.useTls);
+        this.escalationTimeMinutes = toInt(projectProps.get(projectPropKey(PROP_ESCALATION_TIME_MINUTES)), valueOrDefault(this.escalationTimeMinutes, 30));
+        this.approvalOneEscalationTimeMinutes = toInt(projectProps.get(projectPropKey(PROP_APPROVAL_ONE_ESCALATION_TIME_MINUTES)), valueOrDefault(this.approvalOneEscalationTimeMinutes, 30));
+        this.approvalTwoEscalationTimeMinutes = toInt(projectProps.get(projectPropKey(PROP_APPROVAL_TWO_ESCALATION_TIME_MINUTES)), valueOrDefault(this.approvalTwoEscalationTimeMinutes, 30));
+        this.smtpPort = toInt(projectProps.get(projectPropKey(PROP_SMTP_PORT)), valueOrDefault(this.smtpPort, 587));
+        this.checkIntervalSeconds = toInt(projectProps.get(projectPropKey(PROP_CHECK_INTERVAL_SECONDS)), valueOrDefault(this.checkIntervalSeconds, 30));
+        this.useTls = toBool(projectProps.get(projectPropKey(PROP_USE_TLS)), this.useTls == null ? true : this.useTls);
         this.autoApproveOnTimeout = toBool(configuration.get(PROP_AUTO_APPROVE_ON_TIMEOUT), this.autoApproveOnTimeout == null ? false : this.autoApproveOnTimeout);
+        applySelectedApprovalProfile();
+    }
+
+    private String projectPropKey(String propName) {
+        return "project.plugin.WorkflowStep.approval-job-step." + propName;
+    }
+
+    private Map<String, String> loadProjectProperties(PluginStepContext context) {
+        try {
+            Map<String, String> props = context.getFramework().getFrameworkProjectMgr().getFrameworkProject(context.getFrameworkProject()).getProperties();
+            if (props == null) {
+                return Map.of();
+            }
+            LOG.info("ApprovalJobStep: loaded {} merged project properties for {}", props.size(), context.getFrameworkProject());
+            return props;
+        } catch (Exception e) {
+            LOG.warn("ApprovalJobStep: unable to load project properties for {}: {}", context.getFrameworkProject(), e.getMessage());
+            return Map.of();
+        }
     }
 
     private void validateConfiguration() throws StepException {
         if (isBlank(approvalMessage)) throw new StepException("Approval message is required", StepFailureReason.ConfigurationFailure);
+        if (isBlank(deliveryChannel)) {
+            throw new StepException("Delivery channel is required", StepFailureReason.ConfigurationFailure);
+        }
+        if ("slack".equalsIgnoreCase(deliveryChannel)) {
+            if (isBlank(primarySlackUserId)) throw new StepException("Primary Slack user ID is required", StepFailureReason.ConfigurationFailure);
+            if (isBlank(slackBotTokenPath)) throw new StepException("Slack bot token path is required", StepFailureReason.ConfigurationFailure);
+            if (!isBlank(secondaryApproverEmail) && !isBlank(secondarySlackUserId) && !secondarySlackUserId.startsWith("U") && !secondarySlackUserId.startsWith("W")) {
+                throw new StepException("Secondary Slack user ID format looks invalid", StepFailureReason.ConfigurationFailure);
+            }
+            if (!primarySlackUserId.startsWith("U") && !primarySlackUserId.startsWith("W")) {
+                throw new StepException("Primary Slack user ID format looks invalid", StepFailureReason.ConfigurationFailure);
+            }
+            return;
+        }
         if (isBlank(primaryApproverEmail)) throw new StepException("Primary approver email is required", StepFailureReason.ConfigurationFailure);
         if (isBlank(smtpServer)) throw new StepException("SMTP server is required", StepFailureReason.ConfigurationFailure);
         if (isBlank(smtpUsername)) throw new StepException("SMTP username is required", StepFailureReason.ConfigurationFailure);
+        if (isBlank(smtpPasswordPath)) throw new StepException("SMTP password path is required", StepFailureReason.ConfigurationFailure);
         if (isBlank(fromEmailAddress)) throw new StepException("From email address is required", StepFailureReason.ConfigurationFailure);
         if (!isValidEmail(primaryApproverEmail)) throw new StepException("Primary approver email format is invalid", StepFailureReason.ConfigurationFailure);
         if (!isBlank(secondaryApproverEmail) && !isValidEmail(secondaryApproverEmail)) throw new StepException("Secondary approver email format is invalid", StepFailureReason.ConfigurationFailure);
     }
 
-    private String waitForApproval(String smtpPassword, Map<String, Object> approvalData, ExecutionListener logger) throws StepException {
+    private void applySelectedApprovalProfile() {
+        String selectedProfile = normalizeProfileSelection(this.approvalProfile);
+        this.deliveryChannel = firstNonBlank(this.notificationMethod, "email");
+        if ("custom".equals(selectedProfile)) {
+            return;
+        }
+        if ("approval2".equals(selectedProfile)) {
+            this.primaryApproverEmail = firstNonBlank(this.approvalTwoPrimaryApproverEmail, this.primaryApproverEmail);
+            this.secondaryApproverEmail = firstNonBlank(this.approvalTwoSecondaryApproverEmail, this.secondaryApproverEmail);
+            this.primarySlackUserId = firstNonBlank(this.approvalTwoPrimarySlackUserId, this.primarySlackUserId);
+            this.secondarySlackUserId = firstNonBlank(this.approvalTwoSecondarySlackUserId, this.secondarySlackUserId);
+            if (isBlank(this.notificationMethod)) {
+                this.deliveryChannel = firstNonBlank(this.approvalTwoDeliveryChannel, this.deliveryChannel);
+            }
+            this.escalationTimeMinutes = valueOrDefault(this.approvalTwoEscalationTimeMinutes, valueOrDefault(this.escalationTimeMinutes, 30));
+            return;
+        }
+        this.primaryApproverEmail = firstNonBlank(this.approvalOnePrimaryApproverEmail, this.primaryApproverEmail);
+        this.secondaryApproverEmail = firstNonBlank(this.approvalOneSecondaryApproverEmail, this.secondaryApproverEmail);
+        this.primarySlackUserId = firstNonBlank(this.approvalOnePrimarySlackUserId, this.primarySlackUserId);
+        this.secondarySlackUserId = firstNonBlank(this.approvalOneSecondarySlackUserId, this.secondarySlackUserId);
+        if (isBlank(this.notificationMethod)) {
+            this.deliveryChannel = firstNonBlank(this.approvalOneDeliveryChannel, this.deliveryChannel);
+        }
+        this.escalationTimeMinutes = valueOrDefault(this.approvalOneEscalationTimeMinutes, valueOrDefault(this.escalationTimeMinutes, 30));
+    }
+
+    private String normalizeProfileSelection(String configuredProfile) {
+        String normalized = trimOrNull(configuredProfile);
+        if (normalized == null) {
+            return hasLegacyOverrides() ? "custom" : "approval1";
+        }
+        switch (normalized.toLowerCase()) {
+            case "approval2":
+                return "approval2";
+            case "custom":
+                return "custom";
+            case "approval1":
+            default:
+                return "approval1";
+        }
+    }
+
+    private boolean hasLegacyOverrides() {
+        return !isBlank(primaryApproverEmail)
+            || !isBlank(secondaryApproverEmail);
+    }
+
+    private String waitForApproval(String smtpPassword, String slackBotToken, Map<String, Object> approvalData, ExecutionListener logger) throws StepException {
         final String id = String.valueOf(approvalData.get("id"));
         final long start = System.currentTimeMillis();
         final long timeoutMs = (long) valueOrDefault(this.approvalTimeoutMinutes, 60) * 60_000L;
@@ -403,14 +476,14 @@ public class ApprovalJobStep implements StepPlugin, Describable, DynamicProperti
 
             final long elapsed = System.currentTimeMillis() - start;
 
-            if (!escalated && !isBlank(secondaryApproverEmail) && elapsed >= escalationMs) {
+            if (hasSecondaryRecipientConfigured() && !escalated && elapsed >= escalationMs) {
                 try {
-                    sendApprovalEmail(smtpPassword, secondaryApproverEmail, approvalData, true, logger);
-                    approvalData.put("currentApprover", secondaryApproverEmail);
+                    sendEscalationNotification(smtpPassword, slackBotToken, approvalData, logger);
+                    approvalData.put("currentApprover", "slack".equalsIgnoreCase(this.deliveryChannel) ? this.secondarySlackUserId : this.secondaryApproverEmail);
                     escalated = true;
-                    logger.log(2, "Escalated approval request to secondary approver");
+                    logger.log(2, "Escalated approval request to secondary approver via " + this.deliveryChannel + ": " + currentSecondaryRecipientForLogs());
                 } catch (Exception e) {
-                    logger.log(1, "Failed to send escalation email: " + e.getMessage());
+                    logger.log(1, "Failed to send escalation notification: " + e.getMessage());
                 }
             }
 
@@ -434,6 +507,313 @@ public class ApprovalJobStep implements StepPlugin, Describable, DynamicProperti
         }
     }
 
+    private void sendApprovalNotification(String smtpPassword, String slackBotToken, Map<String, Object> approvalData, boolean escalation, ExecutionListener logger) throws Exception {
+        if ("slack".equalsIgnoreCase(this.deliveryChannel)) {
+            String slackUserId = escalation ? this.secondarySlackUserId : this.primarySlackUserId;
+            sendApprovalSlackMessage(slackBotToken, slackUserId, approvalData, escalation, logger);
+            return;
+        }
+        String recipientEmail = escalation ? this.secondaryApproverEmail : this.primaryApproverEmail;
+        sendApprovalEmail(smtpPassword, recipientEmail, approvalData, escalation, logger);
+    }
+
+    private void sendEscalationNotification(String smtpPassword, String slackBotToken, Map<String, Object> approvalData, ExecutionListener logger) throws Exception {
+        sendApprovalNotification(smtpPassword, slackBotToken, approvalData, true, logger);
+    }
+
+    private boolean hasSecondaryRecipientConfigured() {
+        if ("slack".equalsIgnoreCase(this.deliveryChannel)) {
+            return !isBlank(this.secondarySlackUserId);
+        }
+        return !isBlank(this.secondaryApproverEmail);
+    }
+
+    private String currentPrimaryRecipientForLogs() {
+        if ("slack".equalsIgnoreCase(this.deliveryChannel)) {
+            return this.primarySlackUserId;
+        }
+        return this.primaryApproverEmail;
+    }
+
+    private String currentSecondaryRecipientForLogs() {
+        if ("slack".equalsIgnoreCase(this.deliveryChannel)) {
+            return this.secondarySlackUserId;
+        }
+        return this.secondaryApproverEmail;
+    }
+
+    private void sendApprovalSlackMessage(String slackBotToken, String slackUserId, Map<String, Object> approvalData, boolean escalation, ExecutionListener logger) throws Exception {
+        if (isBlank(slackBotToken)) {
+            throw new IOException("Slack bot token could not be loaded from key storage");
+        }
+        if (isBlank(slackUserId)) {
+            throw new IOException("Slack recipient user ID is not configured");
+        }
+        String conversationId = openSlackDirectConversation(slackBotToken, slackUserId);
+        String message = buildSlackFallbackText(approvalData, escalation);
+        String blocks = buildSlackBlocksJson(approvalData, escalation);
+        logger.log(2, "Connecting to Slack API for DM delivery to " + slackUserId);
+        Map<String, String> response = postSlackJson(
+            "https://slack.com/api/chat.postMessage",
+            slackBotToken,
+            "{\"channel\":\"" + jsonEscape(conversationId) + "\",\"text\":\"" + jsonEscape(message) + "\",\"blocks\":" + blocks + "}"
+        );
+        if (!"true".equals(response.get("ok"))) {
+            throw new IOException("Slack chat.postMessage failed: " + firstNonBlank(response.get("error"), "unknown_error"));
+        }
+        logger.log(2, "Slack DM accepted by Slack API for " + slackUserId);
+    }
+
+    private String openSlackDirectConversation(String slackBotToken, String slackUserId) throws Exception {
+        Map<String, String> response = postSlackJson(
+            "https://slack.com/api/conversations.open",
+            slackBotToken,
+            "{\"users\":\"" + jsonEscape(slackUserId) + "\"}"
+        );
+        if (!"true".equals(response.get("ok"))) {
+            throw new IOException("Slack conversations.open failed: " + firstNonBlank(response.get("error"), "unknown_error"));
+        }
+        String channelId = response.get("channel.id");
+        if (isBlank(channelId)) {
+            throw new IOException("Slack conversations.open did not return a DM channel id");
+        }
+        return channelId;
+    }
+
+    private Map<String, String> postSlackJson(String endpoint, String slackBotToken, String jsonBody) throws Exception {
+        HttpURLConnection connection = (HttpURLConnection) new URL(endpoint).openConnection();
+        connection.setRequestMethod("POST");
+        connection.setDoOutput(true);
+        connection.setConnectTimeout(10_000);
+        connection.setReadTimeout(10_000);
+        connection.setRequestProperty("Authorization", "Bearer " + slackBotToken);
+        connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+        byte[] body = jsonBody.getBytes(StandardCharsets.UTF_8);
+        connection.getOutputStream().write(body);
+
+        int code = connection.getResponseCode();
+        InputStream stream = code >= 400 ? connection.getErrorStream() : connection.getInputStream();
+        String responseBody = "";
+        if (stream != null) {
+            try (InputStream input = stream; ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                input.transferTo(baos);
+                responseBody = baos.toString(StandardCharsets.UTF_8);
+            }
+        }
+        connection.disconnect();
+
+        Map<String, String> response = new LinkedHashMap<>();
+        response.put("ok", extractJsonBoolean(responseBody, "ok"));
+        response.put("error", extractJsonString(responseBody, "error"));
+        response.put("channel.id", extractNestedJsonString(responseBody, "channel", "id"));
+        if (code >= 400 && !"true".equals(response.get("ok"))) {
+            throw new IOException("Slack API request failed (" + code + "): " + firstNonBlank(response.get("error"), responseBody));
+        }
+        return response;
+    }
+
+    private String buildSlackFallbackText(Map<String, Object> approvalData, boolean escalation) {
+        String id = String.valueOf(approvalData.get("id"));
+        String token = String.valueOf(approvalData.get("token"));
+        String approveUrl = buildApprovalActionUrl(approvalData, "approve", id, token);
+        String denyUrl = buildApprovalActionUrl(approvalData, "deny", id, token);
+        String executionUrl = mapStringOrNull(approvalData, "executionUrl");
+        String jobUrl = mapStringOrNull(approvalData, "jobUrl");
+
+        StringBuilder body = new StringBuilder();
+        body.append(escalation ? "*Escalated approval required*\n" : "*Approval required*\n");
+        body.append("Project: ").append(String.valueOf(approvalData.get("projectName"))).append("\n");
+        body.append("Job: ").append(String.valueOf(approvalData.get("jobName"))).append("\n");
+        body.append("Message: ").append(String.valueOf(approvalData.get("message"))).append("\n");
+        body.append("Timeout: ").append(valueOrDefault(this.approvalTimeoutMinutes, 60)).append(" minutes\n");
+        if (!isBlank(jobUrl)) {
+            body.append("Rundeck Job: ").append(jobUrl).append("\n");
+        } else if (!isBlank(executionUrl)) {
+            body.append("Rundeck Execution: ").append(executionUrl).append("\n");
+        }
+        body.append("Approve: ").append(approveUrl).append("\n");
+        body.append("Deny: ").append(denyUrl);
+        return body.toString();
+    }
+
+    private String buildSlackBlocksJson(Map<String, Object> approvalData, boolean escalation) {
+        String id = String.valueOf(approvalData.get("id"));
+        String token = String.valueOf(approvalData.get("token"));
+        String approveUrl = buildApprovalActionUrl(approvalData, "approve", id, token);
+        String denyUrl = buildApprovalActionUrl(approvalData, "deny", id, token);
+        String executionUrl = mapStringOrNull(approvalData, "executionUrl");
+        String jobUrl = mapStringOrNull(approvalData, "jobUrl");
+        String primaryRundeckUrl = !isBlank(jobUrl) ? jobUrl : executionUrl;
+        String primaryRundeckLabel = !isBlank(jobUrl) ? "Open Job in Rundeck" : "Open Execution in Rundeck";
+        String title = escalation ? "Escalated Approval Required" : "Approval Required";
+        String subtitle = escalation
+            ? "No response yet. This request has been escalated."
+            : "A workflow is waiting for your approval.";
+        String timeout = String.valueOf(valueOrDefault(this.approvalTimeoutMinutes, 60));
+
+        StringBuilder json = new StringBuilder();
+        json.append("[");
+        appendSlackBlock(json, sectionTextBlock("*Rundeck Approval*\n" + title));
+        appendSlackBlock(json, contextBlock("This request expires in *" + timeout + " minutes*."));
+        appendSlackBlock(json, sectionTextBlock("*" + subtitle + "*"));
+
+        StringBuilder fields = new StringBuilder();
+        fields.append("[");
+        appendSlackJsonItem(fields, mrkdwnField("*Message*\n" + slackMrkdwn(String.valueOf(approvalData.get("message")))));
+        appendSlackJsonItem(fields, mrkdwnField("*Job*\n" + slackMrkdwn(String.valueOf(approvalData.get("jobName")))));
+        appendSlackJsonItem(fields, mrkdwnField("*Project*\n" + slackMrkdwn(String.valueOf(approvalData.get("projectName")))));
+        appendSlackJsonItem(fields, mrkdwnField("*Requested*\n" + slackMrkdwn(String.valueOf(approvalData.get("requestTime")))));
+        if (!isBlank(primaryRundeckUrl)) {
+            appendSlackJsonItem(fields, mrkdwnField("*Rundeck Link*\n<" + slackMrkdwn(primaryRundeckUrl) + "|" + slackMrkdwn(primaryRundeckLabel) + ">"));
+        }
+        fields.append("]");
+        appendSlackBlock(json, "{\"type\":\"section\",\"fields\":" + fields + "}");
+
+        StringBuilder actions = new StringBuilder();
+        actions.append("[");
+        appendSlackJsonItem(actions, buttonElement("approve_action", "Approve", approveUrl, "primary"));
+        appendSlackJsonItem(actions, buttonElement("deny_action", "Deny", denyUrl, "danger"));
+        if (!isBlank(primaryRundeckUrl)) {
+            appendSlackJsonItem(actions, buttonElement("rundeck_action", primaryRundeckLabel, primaryRundeckUrl, null));
+        }
+        actions.append("]");
+        appendSlackBlock(json, "{\"type\":\"actions\",\"elements\":" + actions + "}");
+
+        appendSlackBlock(json, contextBlock("If the buttons do not work, open the Rundeck link and use the approval page there."));
+        json.append("]");
+        return json.toString();
+    }
+
+    private static void appendSlackBlock(StringBuilder json, String blockJson) {
+        appendSlackJsonItem(json, blockJson);
+    }
+
+    private static void appendSlackJsonItem(StringBuilder json, String itemJson) {
+        if (json.length() > 1 && json.charAt(json.length() - 1) != '[') {
+            json.append(",");
+        }
+        json.append(itemJson);
+    }
+
+    private static String sectionTextBlock(String text) {
+        return "{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"" + jsonEscape(text) + "\"}}";
+    }
+
+    private static String contextBlock(String text) {
+        return "{\"type\":\"context\",\"elements\":[{\"type\":\"mrkdwn\",\"text\":\"" + jsonEscape(text) + "\"}]}";
+    }
+
+    private static String mrkdwnField(String text) {
+        return "{\"type\":\"mrkdwn\",\"text\":\"" + jsonEscape(text) + "\"}";
+    }
+
+    private static String buttonElement(String actionId, String text, String url, String style) {
+        StringBuilder json = new StringBuilder();
+        json.append("{\"type\":\"button\",\"action_id\":\"").append(jsonEscape(actionId))
+            .append("\",\"text\":{\"type\":\"plain_text\",\"text\":\"").append(jsonEscape(text))
+            .append("\",\"emoji\":true},\"url\":\"").append(jsonEscape(url)).append("\"");
+        if (!isBlank(style)) {
+            json.append(",\"style\":\"").append(jsonEscape(style)).append("\"");
+        }
+        json.append("}");
+        return json.toString();
+    }
+
+    private static String slackMrkdwn(String input) {
+        if (input == null) {
+            return "";
+        }
+        return input.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    }
+
+    private static String jsonEscape(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("\t", "\\t");
+    }
+
+    private static String extractJsonBoolean(String body, String key) {
+        if (body == null) {
+            return null;
+        }
+        String needle = "\"" + key + "\":";
+        int start = body.indexOf(needle);
+        if (start < 0) {
+            return null;
+        }
+        int valueStart = start + needle.length();
+        while (valueStart < body.length() && Character.isWhitespace(body.charAt(valueStart))) {
+            valueStart++;
+        }
+        if (body.startsWith("true", valueStart)) {
+            return "true";
+        }
+        if (body.startsWith("false", valueStart)) {
+            return "false";
+        }
+        return null;
+    }
+
+    private static String extractJsonString(String body, String key) {
+        if (body == null) {
+            return null;
+        }
+        String needle = "\"" + key + "\":\"";
+        int start = body.indexOf(needle);
+        if (start < 0) {
+            return null;
+        }
+        int valueStart = start + needle.length();
+        StringBuilder out = new StringBuilder();
+        boolean escaped = false;
+        for (int i = valueStart; i < body.length(); i++) {
+            char c = body.charAt(i);
+            if (escaped) {
+                out.append(c);
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == '"') {
+                return out.toString();
+            } else {
+                out.append(c);
+            }
+        }
+        return null;
+    }
+
+    private static String extractNestedJsonString(String body, String objectKey, String key) {
+        if (body == null) {
+            return null;
+        }
+        String objectNeedle = "\"" + objectKey + "\":{";
+        int objectStart = body.indexOf(objectNeedle);
+        if (objectStart < 0) {
+            return null;
+        }
+        int sectionStart = objectStart + objectNeedle.length();
+        int braceDepth = 1;
+        int sectionEnd = sectionStart;
+        while (sectionEnd < body.length() && braceDepth > 0) {
+            char c = body.charAt(sectionEnd++);
+            if (c == '{') {
+                braceDepth++;
+            } else if (c == '}') {
+                braceDepth--;
+            }
+        }
+        if (sectionEnd <= sectionStart) {
+            return null;
+        }
+        return extractJsonString(body.substring(sectionStart, sectionEnd), key);
+    }
+
     private void sendApprovalEmail(String smtpPassword, String toEmail, Map<String, Object> approvalData, boolean escalation, ExecutionListener logger) throws Exception {
         Properties props = new Properties();
         props.put("mail.smtp.host", smtpServer);
@@ -441,6 +821,7 @@ public class ApprovalJobStep implements StepPlugin, Describable, DynamicProperti
         props.put("mail.smtp.auth", "true");
         if (Boolean.TRUE.equals(useTls)) {
             props.put("mail.smtp.starttls.enable", "true");
+            props.put("mail.smtp.starttls.required", "true");
         }
 
         Session session = Session.getInstance(props, new javax.mail.Authenticator() {
@@ -468,15 +849,26 @@ public class ApprovalJobStep implements StepPlugin, Describable, DynamicProperti
         mp.addBodyPart(htmlPart);
         message.setContent(mp);
 
-        Transport.send(message);
-        logger.log(3, "Email sent successfully");
+        logger.log(2, "Connecting to SMTP server " + smtpServer + ":" + valueOrDefault(smtpPort, 587) + " as " + smtpUsername);
+        Transport transport = session.getTransport("smtp");
+        try {
+            transport.connect();
+            logger.log(2, "SMTP authentication succeeded for " + smtpUsername + " on " + smtpServer + ":" + valueOrDefault(smtpPort, 587));
+            transport.sendMessage(message, message.getAllRecipients());
+            logger.log(2, "Approval email delivered to " + toEmail + " from " + fromEmailAddress);
+        } finally {
+            try {
+                transport.close();
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     private String buildEmailBody(Map<String, Object> approvalData, boolean escalation) {
         String id = String.valueOf(approvalData.get("id"));
         String token = String.valueOf(approvalData.get("token"));
-        String approveUrl = approvalUrlBase + "/approve?id=" + id + "&token=" + token;
-        String denyUrl = approvalUrlBase + "/deny?id=" + id + "&token=" + token;
+        String approveUrl = buildApprovalActionUrl(approvalData, "approve", id, token);
+        String denyUrl = buildApprovalActionUrl(approvalData, "deny", id, token);
         String title = escalation ? "Escalated Approval Required" : "Approval Required";
         String subtitle = escalation
             ? "No response yet. This request has been escalated."
@@ -542,9 +934,22 @@ public class ApprovalJobStep implements StepPlugin, Describable, DynamicProperti
             body.append("Rundeck Link: ").append(primaryRundeckUrl).append("\n");
         }
         body.append("\n");
-        body.append("Approve: ").append(approvalUrlBase).append("/approve?id=").append(id).append("&token=").append(token).append("\n");
-        body.append("Deny: ").append(approvalUrlBase).append("/deny?id=").append(id).append("&token=").append(token).append("\n\n");
+        body.append("Approve: ").append(buildApprovalActionUrl(approvalData, "approve", id, token)).append("\n");
+        body.append("Deny: ").append(buildApprovalActionUrl(approvalData, "deny", id, token)).append("\n\n");
         return body.toString();
+    }
+
+    private String buildApprovalActionUrl(Map<String, Object> approvalData, String action, String id, String token) {
+        String appBase = mapStringOrNull(approvalData, "rundeckBaseUrl");
+        String projectName = mapStringOrNull(approvalData, "projectName");
+        if (!isBlank(appBase) && !isBlank(projectName)) {
+            return appBase
+                + "/menu/approval/" + action
+                + "?project=" + urlEncode(projectName)
+                + "&id=" + urlEncode(id)
+                + "&token=" + urlEncode(token);
+        }
+        return approvalUrlBase + "/" + action + "?id=" + urlEncode(id) + "&token=" + urlEncode(token);
     }
 
     private static String urlEncode(String input) {
@@ -798,6 +1203,10 @@ public class ApprovalJobStep implements StepPlugin, Describable, DynamicProperti
         if (val == null) return dflt;
         String normalized = trimOrNull(String.valueOf(val));
         return normalized == null ? dflt : normalized;
+    }
+
+    private static String firstNonBlank(String preferred, String fallback) {
+        return !isBlank(preferred) ? preferred : fallback;
     }
 
     private static UserSelectData loadUserSelectData() {

@@ -1,62 +1,41 @@
 # Configuration Reference
 
-## Required vs optional fields
+## Project Approvals Settings
 
-| Property | Required | Default | Description |
-| --- | --- | --- | --- |
-| `approvalMessage` | Yes | n/a | Text sent to approvers. |
-| `approvalTimeoutMinutes` | No | `60` | Maximum wait time for approval. |
-| `autoApproveOnTimeout` | No | `false` | If true, timeout counts as approved; if false, timeout fails step. |
-| `primaryApproverEmail` | Yes | n/a | Primary approver email (dropdown + free input). |
-| `secondaryApproverEmail` | No | empty | Optional escalation approver email. |
-| `escalationTimeMinutes` | No | `30` | Delay before escalation email is sent. |
-| `smtpServer` | Yes | n/a | SMTP host. |
-| `smtpPort` | No | `587` | SMTP port. |
-| `smtpUsername` | Yes | n/a | SMTP username. |
-| `smtpPasswordPath` | Yes | n/a | Rundeck Key Storage path to SMTP password. |
-| `fromEmailAddress` | Yes | n/a | Sender email address. |
-| `useTls` | No | `true` | Enables STARTTLS for SMTP transport. |
-| `approvalUrlBase` | No | `http://localhost:5555` | Base URL for callback links. Port is used for local callback server bind. |
-| `checkIntervalSeconds` | No | `30` | Poll interval while step waits for approval callback. |
+### Notification Method
 
-## Runtime decision logic
+- Email
+- Slack
 
-| Situation | Outcome |
-| --- | --- |
-| Primary approver clicks approve | Step returns `approved`; workflow continues. |
-| Primary or secondary approver clicks deny | Step returns `denied`; step fails. |
-| No response before timeout and `autoApproveOnTimeout=true` | Step returns `approved`; workflow continues. |
-| No response before timeout and `autoApproveOnTimeout=false` | Step returns `timeout`; step fails and execution terminates. |
-| Secondary approver configured and elapsed time >= `escalationTimeMinutes` | Escalation email sent once to secondary approver. |
+### Approval Profiles
 
-## Approver dropdown source
+Each profile includes:
 
-Dropdown values come from Rundeck database users (`rduser.email`).
+- primary approver
+- secondary approver
+- escalation time in minutes
 
-Lookup behavior:
+### Shared Advanced Options
 
-1. Use env vars when present:
-   - `RUNDECK_DATABASE_URL`
-   - `RUNDECK_DATABASE_USERNAME`
-   - `RUNDECK_DATABASE_PASSWORD`
-   - `RUNDECK_DATABASE_DRIVER` (optional)
-2. Fallback to `$RDECK_BASE/server/config/rundeck-config.properties`.
-3. If no users can be loaded, dropdown can be empty (free input still allowed).
+- Approval URL Base: base URL used in approval messages
+- Check Interval: polling interval while workflow waits
 
-## SMTP password path behavior
+### Email Delivery
 
-- `smtpPasswordPath` must reference an existing key in Rundeck Key Storage.
-- The plugin resolves it via storage tree API at execution time.
-- Missing key causes configuration failure before email send.
+- SMTP Server
+- SMTP Port
+- SMTP Username
+- SMTP Password Path
+- From Email Address
+- Use TLS
 
-## Recommended baseline config
+### Slack Delivery
 
-For initial production rollout:
+- Slack Bot Token Path
+- Slack workspace user selection for approvers
 
-- `approvalTimeoutMinutes=15`
-- `autoApproveOnTimeout=false`
-- `escalationTimeMinutes=5`
-- `checkIntervalSeconds=15`
-- `approvalUrlBase=https://<public-hostname>`
+## Workflow Step Fields
 
-Tune these values based on your thread/worker capacity and approval response SLA.
+- Approval Profile
+- Approval Message
+- Auto-approve on Timeout

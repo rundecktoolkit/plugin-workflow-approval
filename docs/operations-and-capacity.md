@@ -1,48 +1,14 @@
-# Operations and Capacity Guidance
+# Operations and Capacity
 
-## Critical behavior
-
-Each pending approval keeps an execution active while waiting.
-This consumes worker/thread capacity until one of these events occurs:
-
-- Approver clicks approve.
-- Approver clicks deny.
-- Timeout is reached.
+Pending approvals keep workflow executions active until they are approved, denied, or timed out.
 
 ## Why this matters
 
-If many jobs wait on approval at once, you can hit execution limits and thread starvation.
-Symptoms include:
+Each waiting approval continues to occupy execution capacity. At scale, long-running approval waits can slow other work on the platform.
 
-- Slow job starts.
-- Queued executions growing.
-- Other workflows delayed behind pending approvals.
+## Recommendations
 
-## Capacity planning recommendations
-
-1. Keep approval timeout short and explicit.
-2. Use escalation to reduce long waits.
-3. Set conservative concurrency for jobs that include approval step.
-4. Separate high-volume automation from approval-heavy workflows.
-5. Monitor pending approval count as an operational metric.
-
-## Suggested guardrails
-
-- Set `approvalTimeoutMinutes` to business-appropriate minimum.
-- Prefer `autoApproveOnTimeout=false` unless policy explicitly allows auto-approval.
-- Apply project/job-level concurrency controls in Rundeck.
-- Document ownership for pending approvals and escalation responders.
-
-## Monitoring checklist
-
-- Track job executions waiting in approval state.
-- Track average approval latency.
-- Alert on backlog threshold (example: more than 10 pending approvals for 10+ minutes).
-- Review SMTP delivery failures, because undelivered mail can hold executions open until timeout.
-
-## Runbook snippet for responders
-
-1. Confirm callback URL is reachable by approvers.
-2. Confirm SMTP credentials/key path still valid.
-3. Review active pending approvals and cancel stale executions if needed.
-4. Adjust timeout/escalation values if backlog repeats.
+- keep timeouts short and intentional
+- keep escalation delays practical
+- monitor concurrent waiting approvals
+- avoid using approvals as indefinite task queues

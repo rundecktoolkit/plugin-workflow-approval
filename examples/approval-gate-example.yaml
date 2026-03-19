@@ -1,0 +1,24 @@
+- defaultTab: nodes
+  description: Example workflow using the Approval Job Step plugin
+  executionEnabled: true
+  group: examples/approval
+  id: 4b6e9bb0-approval-example
+  loglevel: INFO
+  name: Approval Gate Example
+  nodeFilterEditable: false
+  nodesSelectedByDefault: true
+  notification:
+    onfailure:
+      email:
+        recipients: admin@example.com
+  scheduleEnabled: true
+  sequence:
+    commands:
+      - configuration:
+          approvalProfile: approval1
+          approvalMessage: Please review this execution and approve or deny it.
+          autoApproveOnTimeout: 'false'
+        nodeStep: false
+        type: approval-job-step
+      - exec: echo "Approval received. Continuing workflow."
+  uuid: 4b6e9bb0-approval-example

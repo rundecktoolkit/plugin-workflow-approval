@@ -1,20 +1,21 @@
 <h1 align="center">Rundeck Approval Job Step Plugin</h1>
 
 <p align="center">
-  <strong>Email approval gate for Rundeck workflows with escalation and callback control</strong>
+  <strong>Project-scoped approval gates for Rundeck workflows with email or Slack delivery</strong>
 </p>
 
 <p align="center">
   <a href="#overview">Overview</a> •
   <a href="#installation">Installation</a> •
   <a href="#configuration">Configuration</a> •
-  <a href="#usage">Usage</a> •
+  <a href="#uninstall">Uninstall</a> •
   <a href="#operations-capacity">Operations & Capacity</a>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Rundeck-Community-5C9E3D?logo=rundeck&logoColor=white" alt="Rundeck Community"/>
   <img src="https://img.shields.io/badge/WorkflowStep-Approval-0F1E57" alt="Workflow Step"/>
+  <img src="https://img.shields.io/badge/Notifications-Email%20or%20Slack-4A154B" alt="Email or Slack"/>
   <img src="https://img.shields.io/badge/License-MIT-blue" alt="MIT License"/>
 </p>
 
@@ -24,18 +25,18 @@
 
 This plugin adds an **Approval Job Step** to Rundeck workflows.
 
-It allows a workflow to pause for human approval by sending email links to approvers.
+It lets a workflow pause for human approval using centrally managed, project-scoped approval settings. Notifications can be sent by **email** or **Slack DM**, and approval actions route back through the Rundeck web app.
 
 ### Key features
 
-- Primary approver email with **Approve** and **Deny** callback links
-- Optional secondary approver escalation after a configurable delay
-- Timeout handling:
-  - continue on timeout (`autoApproveOnTimeout=true`)
-  - fail/terminate on timeout (`autoApproveOnTimeout=false`)
-- Deny path hard-stop behavior for immediate execution failure
-- Rundeck job link included in approval email body
-- SMTP secret retrieved from Rundeck Key Storage
+- Workflow step plugin installable as a single JAR
+- Project-level approval profiles: `Approval 1` and `Approval 2`
+- Delivery by **Email** or **Slack**
+- Optional secondary approver escalation
+- Timeout behavior with auto-approve or fail/terminate
+- Rundeck-hosted approval landing page and approve/deny callbacks
+- SMTP and Slack secrets stored in Rundeck Key Storage
+- Test actions for SMTP, email delivery, Slack connection, and Slack delivery
 
 ## Compatibility
 
@@ -46,71 +47,87 @@ It allows a workflow to pause for human approval by sending email links to appro
 
 ## Release
 
-- Current version: `3.0.9`
-- Artifact: `releases/approval-job-step-3.0.9.jar`
-- Release notes: `releases/CHANGELOG-3.0.9.md`
+- Current version: `3.1.0`
+- Artifact: `releases/approval-job-step-3.1.0.jar`
+- Release notes: `releases/CHANGELOG-3.1.0.md`
 
 ## Installation
 
-Download the latest JAR from [Releases](../../releases) and install via the Rundeck UI:
+Download the latest JAR from [Releases](../../releases) and install it via the Rundeck UI:
 
-1. Navigate to **System Menu** → **Plugins** → **Upload Plugin**
-2. Select `approval-job-step-3.0.9.jar`
-3. The plugin is available immediately. If your environment uses plugin caching, reload plugins or restart Rundeck.
+1. Open **System Menu** -> **Plugins** -> **Upload Plugin**
+2. Select `approval-job-step-3.1.0.jar`
+3. Save/upload and reload plugins or restart Rundeck if your environment caches plugins
 
 ### Alternative CLI install
 
 ```bash
-cp releases/approval-job-step-3.0.9.jar $RDECK_BASE/libext/
+cp releases/approval-job-step-3.1.0.jar "$RDECK_BASE/libext/"
 # then reload plugins or restart Rundeck
-```
-
-### Build from source
-
-```bash
-./gradlew clean jar
-cp build/libs/approval-job-step-3.0.9.jar $RDECK_BASE/libext/
 ```
 
 ## Configuration
 
-### Required parameters
+Configure the plugin from the project-level **Approvals** settings page.
 
-| Parameter | Description |
-|-----------|-------------|
-| `approvalMessage` | Message shown in approval request email |
-| `primaryApproverEmail` | First approver email |
-| `smtpServer` | SMTP server host |
-| `smtpUsername` | SMTP username |
-| `smtpPasswordPath` | Rundeck Key Storage path for SMTP password |
-| `fromEmailAddress` | Sender address |
+### Approvers tab
 
-### Common optional parameters
+- `Approval 1`
+  - primary approver
+  - secondary approver
+  - escalation time
+- `Approval 2`
+  - primary approver
+  - secondary approver
+  - escalation time
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `approvalTimeoutMinutes` | `60` | Max time to wait for response |
-| `autoApproveOnTimeout` | `false` | Continue automatically when timeout is reached |
-| `secondaryApproverEmail` | (empty) | Escalation approver |
-| `escalationTimeMinutes` | `30` | Delay before escalation email |
-| `smtpPort` | `587` | SMTP port |
-| `useTls` | `true` | Enable STARTTLS |
-| `approvalUrlBase` | `http://localhost:5555` | Base URL used in approve/deny links |
-| `checkIntervalSeconds` | `30` | Polling interval while waiting |
+### Email Configuration tab
 
-## Usage
+- SMTP server
+- SMTP port
+- SMTP username
+- SMTP password path
+- From email address
+- Use TLS
+- SMTP connection test
+- Test email delivery
 
-1. Add **Approval Job Step** as a workflow step (typically first).
-2. Configure SMTP and approvers.
-3. Set `approvalUrlBase` to a reachable URL for approvers.
-4. Run job:
-- Approve -> workflow continues.
-- Deny -> workflow hard-stops/fails.
-- Timeout -> follows `autoApproveOnTimeout`.
+### Slack Configuration tab
+
+- Slack bot token path
+- Slack connection test
+- Slack user selection from workspace users
+- Test Slack delivery
+
+### Shared Advanced Options
+
+- Approval URL base
+- Check interval
+
+## Workflow Step Usage
+
+Add **Approval Job Step** to a workflow and configure:
+
+- `Approval Profile`
+- `Approval Message`
+- `Auto-approve on Timeout`
+
+The project-level approval settings control who is notified and how delivery happens.
 
 ### Example job definition
 
 - `examples/approval-gate-example.yaml`
+
+## Uninstall
+
+This remains a standard installable/uninstallable Rundeck plugin.
+
+To uninstall:
+
+1. Remove `approval-job-step-3.1.0.jar` from `$RDECK_BASE/libext/`
+2. Reload plugins or restart Rundeck
+
+Any saved project approval settings become inactive once the plugin JAR is removed.
 
 ## Operations & Capacity
 
@@ -118,22 +135,12 @@ cp build/libs/approval-job-step-3.0.9.jar $RDECK_BASE/libext/
 
 Operational impact at scale:
 
-- Open approvals consume active execution/worker capacity.
-- Too many pending approvals can delay other jobs.
-- Keep timeout values reasonable and monitor concurrent approvals.
+- Open approvals consume active execution/worker capacity
+- Too many pending approvals can delay other jobs
+- Long escalation windows increase how long resources stay reserved
+- Keep timeouts and escalation settings intentional and monitored
 
 See:
-
-- `docs/operations-and-capacity.md`
-- `docs/troubleshooting.md`
-
-## Security Notes
-
-- SMTP password is read from Rundeck Key Storage, not plaintext config.
-- Callback links are tokenized (`id` + `token`) and validated server-side.
-- Use HTTPS in `approvalUrlBase` for production deployments.
-
-## Documentation
 
 - `docs/install-and-setup.md`
 - `docs/configuration-reference.md`

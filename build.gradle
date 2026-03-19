@@ -3,7 +3,7 @@ plugins {
 }
 
 group = 'com.plugin'
-version = '3.0.9'
+version = '3.1.0'
 
 java {
   sourceCompatibility = JavaVersion.VERSION_11
@@ -28,7 +28,7 @@ jar {
       'Rundeck-Plugin-Version': '2.0',
       'Rundeck-Plugin-Archive': 'true',
       'Rundeck-Plugin-Name': 'Approval Job Step',
-      'Rundeck-Plugin-Description': 'Approval workflow step with email links and callback handling',
+      'Rundeck-Plugin-Description': 'Approval workflow step with centrally managed email or Slack delivery, escalation, and callback handling',
       'Rundeck-Plugin-Author': 'Rundeck Community',
       'Rundeck-Plugin-Rundeck-Compatibility-Version': '5.x',
       'Rundeck-Plugin-Tags': 'java,WorkflowStep',
